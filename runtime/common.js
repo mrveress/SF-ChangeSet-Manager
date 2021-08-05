@@ -9,6 +9,14 @@ class ChangeSetManager {
         return JSON.stringify(await this.getChangeSetCollection(), null, '\t');
     }
 
+    getChangeSetNameForFile() {
+        return this.getChangeSetName().replaceAll(/[\s\-\.\/\\\+\=\$\%\&\*\@\!\(\)]+/gi, '_');
+    }
+
+    getChangeSetName() {
+        return document.querySelector("h2.pageDescription").innerText;
+    }
+
     getComponentsTableSelector() {
         let componentsTableSelector = null;
         if (window.location.href.includes("inboundChangeSetDetailPage")) {
@@ -27,12 +35,16 @@ class ChangeSetManager {
         await this.goToFirstPage();
         let navigationToNextStatus = null;
         while (navigationToNextStatus !== "noButton") {
-            let rows = document.querySelector(componentsTableSelector).querySelectorAll("tr");
-            for (let i = 0; i < rows.length; i++) {
-                let changeSetItem = this.getChangeSetItemFromTr(rows[i]);
-                this.addChangeSetItemToChangeSetCollection(changeSetCollection, changeSetDuplicationChecker, changeSetItem);
+            if (document.querySelector(componentsTableSelector)) {
+                let rows = document.querySelector(componentsTableSelector).querySelectorAll("tr");
+                for (let i = 0; i < rows.length; i++) {
+                    let changeSetItem = this.getChangeSetItemFromTr(rows[i]);
+                    this.addChangeSetItemToChangeSetCollection(changeSetCollection, changeSetDuplicationChecker, changeSetItem);
+                }
+                navigationToNextStatus = await this.goToNextPage();
+            } else {
+                navigationToNextStatus = "noButton"
             }
-            navigationToNextStatus = await this.goToNextPage();
         }
         this.sortChangeSetCollection(changeSetCollection);
         let result;
@@ -214,15 +226,30 @@ class ChangeSetManager {
     }
 
     async importFromChangeSetCollection(changeSetCollection) {
-        let internalChangeSetId = await this.getQueryParameterFromButtonPage('input[id$="component_list_form_buttons:outboundCs_add"]', "id");
-        let orgMetadata = await this.getOrgMetadata(changeSetCollection);
-        await this.importByTypes(internalChangeSetId, changeSetCollection, orgMetadata);
+        let childWindow = await this.openChildWindow(window.location.href);
+        await this.redirectWithButton(childWindow, 'input[id$="component_list_form_buttons:outboundCs_add"]');
+        let internalChangeSetId = this.getQueryParameter(childWindow, "id");
+        let customMetadataCheckList = this.getCustomMetadataCheckListFromAddPage(childWindow);
+        let orgMetadata = await this.getOrgMetadata(changeSetCollection, customMetadataCheckList);
+        await this.importByTypes(childWindow, internalChangeSetId, changeSetCollection, orgMetadata);
     }
 
-    async importByTypes(internalChangeSetId, changeSetCollection, orgMetadata) {
+    getCustomMetadataCheckListFromAddPage(childWindow) {
+        let customMetadataList = {};
+        childWindow.document.querySelectorAll("select#entityType option").forEach(optionElement => {
+            if (optionElement.value.endsWith("__mdt")) {
+                customMetadataList[optionElement.innerText] = {
+                    "label" : optionElement.innerText,
+                    "value" : optionElement.value
+                };
+            }
+        });
+        return customMetadataList;
+    }
+
+    async importByTypes(childWindow, internalChangeSetId, changeSetCollection, orgMetadata) {
         let existsChangeSetCollection = await this.getChangeSetCollection();
         //console.log(existsChangeSetCollection);
-        let childWindow = await this.openChildWindow("https://" + location.hostname + "/p/mfpkg/AddToPackageFromChangeMgmtUi?id=" + internalChangeSetId);
         let targetForm = childWindow.document.querySelector("form#editPage");
 
         let atLeastOne = false;
@@ -243,7 +270,7 @@ class ChangeSetManager {
             setTimeout(() => {
                 alert("Done!");
                 resolve("done");
-                window.location.reload();
+                //window.location.reload();
             }, 500);
         });
     }
@@ -299,32 +326,37 @@ class ChangeSetManager {
         });
     }
 
-    async getQueryParameterFromButtonPage(buttonSelector, queryParamKey) {
-        let childWindow = await this.openChildWindow(window.location.href);
+    getQueryParameter(childWindow, queryParamKey) {
+        let urlParams = new URLSearchParams(childWindow.location.search);
+        let queryParamValue = urlParams.get(queryParamKey);
+        return queryParamValue;
+    }
+
+    async redirectWithButton(childWindow, buttonSelector) {
+        let oldChildWindowHref = childWindow.location.href;
         childWindow.document.querySelector(buttonSelector).click();
         return new Promise((resolve, reject) => {
             let tmpInterval = setInterval(() => {
-                if (window.location.href !== childWindow.location.href) {
+                if (oldChildWindowHref !== childWindow.location.href) {
                     clearInterval(tmpInterval);
-                    let urlParams = new URLSearchParams(childWindow.location.search);
-                    let queryParamValue = urlParams.get(queryParamKey);
-                    childWindow.close();
-                    resolve(queryParamValue);
+                    resolve(childWindow);
                 }
             }, 1000);
         });
     }
 
-    async getOrgMetadata(changeSetCollection) {
+    async getOrgMetadata(changeSetCollection, customMetadataCheckList) {
         let orgMetadata = {};
-        Object.keys(changeSetCollection).forEach(async (changeSetItemsType) => {
-            await this.pushToolingAPIItemsToOrgMetadataVariable(changeSetItemsType, changeSetCollection, orgMetadata);
-        });
+        let changeSetCollectionKeys = Object.keys(changeSetCollection);
+        for (let i = 0; i < changeSetCollectionKeys.length; i++) {
+            let changeSetItemsType = changeSetCollectionKeys[i];
+            await this.pushToolingAPIItemsToOrgMetadataVariable(changeSetItemsType, changeSetCollection, orgMetadata, customMetadataCheckList);
+        }
         console.log(orgMetadata);
         return orgMetadata;
     }
 
-    async pushToolingAPIItemsToOrgMetadataVariable(changeSetItemsType, changeSetCollection, orgMetadata) {
+    async pushToolingAPIItemsToOrgMetadataVariable(changeSetItemsType, changeSetCollection, orgMetadata, customMetadataCheckList) {
         let result = null;
         let typeResolver = this.getTypeResolver(changeSetItemsType);
         if (typeResolver) {
@@ -334,13 +366,29 @@ class ChangeSetManager {
                         await this.pushToolingAPIItemsToOrgMetadataVariable(typeResolver["prerequisiteTypes"][i], changeSetCollection, orgMetadata);
                     }
                 }
-                let soql = typeof typeResolver.toolingApiSoql === "function" ? typeResolver.toolingApiSoql(changeSetCollection, orgMetadata) : typeResolver.toolingApiSoql;
-                let rawData = await this.getToolingAPIResults(soql);
-                let parsedData = typeResolver.toolingApiTransformation(rawData);
-                orgMetadata[typeResolver.toolingApiTypeName] = parsedData;
-                result = parsedData;
+                if (typeResolver["toolingApiSoql"]) {
+                    let soql = typeof typeResolver.toolingApiSoql === "function" ? typeResolver.toolingApiSoql(changeSetCollection, orgMetadata) : typeResolver.toolingApiSoql;
+                    let rawData = await this.getToolingAPIResults(soql);
+                    let parsedData = typeResolver.toolingApiTransformation(rawData);
+                    orgMetadata[typeResolver.toolingApiTypeName] = parsedData;
+                    result = parsedData;
+                } else if (typeResolver["apiInfoHandler"]) {
+                    let parsedData = await typeResolver.apiInfoHandler(this, changeSetCollection);
+                    orgMetadata[typeResolver.toolingApiTypeName] = parsedData;
+                    result = parsedData;
+                }
             } else if (orgMetadata[typeResolver.toolingApiTypeName]) {
                 result = orgMetadata[typeResolver.toolingApiTypeName];
+            }
+        } else if (customMetadataCheckList[changeSetItemsType]) {
+            typeResolver = this.getTypeResolver("Custom Metadata Type Records");
+            if (typeResolver && typeResolver["apiInfoHandler"]) {
+                let parsedData = await typeResolver.apiInfoHandler(this, changeSetCollection, customMetadataCheckList[changeSetItemsType]);
+                if (!orgMetadata[typeResolver.toolingApiTypeName]) {
+                    orgMetadata[typeResolver.toolingApiTypeName] = {};
+                }
+                orgMetadata[typeResolver.toolingApiTypeName][changeSetItemsType] = parsedData;
+                result = parsedData;
             }
         }
         return result;
@@ -372,6 +420,23 @@ class ChangeSetManager {
         });
     }
 
+    getRestAPIResults(target) {
+        return new Promise((resolve, reject) => {
+            let url = "https://" + location.hostname + "/services/data/v51.0" + target.replaceAll(/\s+/gi,"+");
+            let sid = document.cookie.match(/(^|;\s*)sid=(.+?);/)[2];
+
+            let xhr = new XMLHttpRequest();
+            xhr.open('GET', url);
+            xhr.setRequestHeader('Authorization', 'Bearer ' + sid);
+            xhr.responseType = "json";
+            xhr.send();
+            xhr.onload = (event) => {
+                let result = xhr.response;
+                resolve(result);
+            }
+        });
+    }
+
     getTypeResolver(changeSetItemsType) {
         let result = null
         if (ChangeSetManager.TypeResolver[changeSetItemsType]) {
@@ -386,6 +451,67 @@ class ChangeSetManager {
     //--------------------------------------------
 
     static TypeResolver = {
+        "Aura Component Bundle" : {
+            toolingApiTypeName : "AuraDefinitionBundle",
+            prerequisiteTypes : null,
+            toolingApiSoql : "SELECT Id,DeveloperName FROM AuraDefinitionBundle WHERE NameSpacePrefix = null",
+            toolingApiTransformation : (rawData) => {
+                let result = {};
+                rawData.records.forEach(rawDataRecord => {
+                    result[rawDataRecord.DeveloperName] = rawDataRecord;
+                });
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["AuraDefinitionBundle"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.apiName === anotherChageSetItem.apiName
+                );
+            }
+        },
+        "Lightning Web Component Bundle" : {
+            toolingApiTypeName : "LightningComponentBundle",
+            prerequisiteTypes : null,
+            toolingApiSoql : "SELECT Id,DeveloperName FROM LightningComponentBundle WHERE NameSpacePrefix = null",
+            toolingApiTransformation : (rawData) => {
+                let result = {};
+                rawData.records.forEach(rawDataRecord => {
+                    result[rawDataRecord.DeveloperName] = rawDataRecord;
+                });
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["LightningComponentBundle"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.apiName === anotherChageSetItem.apiName
+                );
+            }
+        },
+        "Action" : {
+            toolingApiTypeName : "QuickActionDefinition",
+            prerequisiteTypes : null,
+            toolingApiSoql : "SELECT Id,DeveloperName,SobjectType FROM QuickActionDefinition WHERE NameSpacePrefix = null",
+            toolingApiTransformation : (rawData) => {
+                let result = {};
+                rawData.records.forEach(rawDataRecord => {
+                    result[rawDataRecord.DeveloperName] = rawDataRecord;
+                });
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["QuickActionDefinition"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.apiName === anotherChageSetItem.apiName
+                    && changeSetItem.parentObject === anotherChageSetItem.parentObject
+                );
+            }
+        },
         "Apex Class" : {
             toolingApiTypeName : "ApexClass",
             prerequisiteTypes : null,
@@ -428,12 +554,12 @@ class ChangeSetManager {
         },
         "Custom Field" : {
             toolingApiTypeName : "FieldDefinition",
-            prerequisiteTypes : ["Custom Object"],
+            prerequisiteTypes : null,
             toolingApiSoql : (changeSetCollection, orgMetadata) => {
-                let soql = "SELECT DurableId,EntityDefinitionId,EntityDefinition.QualifiedApiName,QualifiedApiName FROM FieldDefinition WHERE ";
+                let soql = "SELECT DurableId,EntityDefinition.QualifiedApiName,QualifiedApiName FROM FieldDefinition WHERE ";
                 let whereClauses = [];
                 changeSetCollection["Custom Field"].forEach(customFieldItem => {
-                    let whereClause = "EntityDefinitionId = '" + orgMetadata["EntityDefinition"][customFieldItem.apiName.split(".")[0]].DurableId + "'";
+                    let whereClause = "EntityDefinition.QualifiedApiName = '" + customFieldItem.apiName.split(".")[0] + "'";
                     if (!whereClauses.includes(whereClause)) {
                         whereClauses.push(whereClause);
                     }
@@ -472,7 +598,18 @@ class ChangeSetManager {
         "Custom Object" : {
             toolingApiTypeName : "EntityDefinition",
             prerequisiteTypes : null,
-            toolingApiSoql : "SELECT DurableId,QualifiedApiName FROM EntityDefinition",
+            toolingApiSoql : (changeSetCollection, orgMetadata) => {
+                let soql = "SELECT DurableId,QualifiedApiName FROM EntityDefinition WHERE ";
+                let whereClauses = [];
+                changeSetCollection["Custom Object"].forEach(customFieldItem => {
+                    let whereClause = "QualifiedApiName = '" + customFieldItem.apiName + "'";
+                    if (!whereClauses.includes(whereClause)) {
+                        whereClauses.push(whereClause);
+                    }
+                });
+                soql += whereClauses.join(" OR ");
+                return soql;
+            },
             toolingApiTransformation : (rawData) => {
                 let result = {};
                 rawData.records.forEach(rawDataRecord => {
@@ -556,5 +693,88 @@ class ChangeSetManager {
                 );
             }
         },
+        "List View" : {
+            toolingApiTypeName : "ListView",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection) => {
+                let result = {};
+                let targetSObjects = [];
+                for (let i = 0; i < changeSetCollection["List View"].length; i++) {
+                    let changeSetItem = changeSetCollection["List View"][i];
+                    let parentSObject = changeSetItem.apiName.split(".")[0];
+                    if (!targetSObjects.includes(parentSObject)) {
+                        targetSObjects.push(parentSObject);
+                        let apiResults = await changeSetManager.getRestAPIResults("/sobjects/" + parentSObject + "/listviews");
+                        for (let j = 0; j < apiResults.listviews.length; j++) {
+                            result[apiResults.sobjectType + "." + apiResults.listviews[j].developerName] = apiResults.listviews[j];
+                        }
+                    }
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["ListView"][changeSetItem.apiName].id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                    && changeSetItem.parentObject === anotherChageSetItem.parentObject
+                );
+            }
+        },
+        "Validation Rule" : {
+            toolingApiTypeName : "ValidationRule",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection) => {
+                let result = {};
+                let targetSObjects = [];
+                for (let i = 0; i < changeSetCollection["Validation Rule"].length; i++) {
+                    let changeSetItem = changeSetCollection["Validation Rule"][i];
+                    let parentSObject = changeSetItem.apiName.split(".")[0];
+                    if (!targetSObjects.includes(parentSObject)) {
+                        targetSObjects.push(parentSObject);
+                        let apiListResults = await changeSetManager.getToolingAPIResults("SELECT Id FROM ValidationRule WHERE EntityDefinition.QualifiedApiName = '" + parentSObject + "'");
+                        for (let j = 0; j < apiListResults.records.length; j++) {
+                            let apiResults = await changeSetManager.getToolingAPIResults("SELECT Id,FullName,EntityDefinition.QualifiedApiName FROM ValidationRule WHERE Id = '" + apiListResults.records[j].Id + "' LIMIT 1");
+                            apiResults = apiResults.records[0];
+                            result[apiResults.FullName] = apiResults;
+                        }
+                    }
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["ValidationRule"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                    && changeSetItem.parentObject === anotherChageSetItem.parentObject
+                );
+            }
+        },
+        "Custom Metadata Type Records" : {
+            toolingApiTypeName : "CustomMetadataTypeRecords",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection, customMetadataCheckListItem) => {
+                let result = {};
+                let customMetadataTypeLabel = customMetadataCheckListItem.label;
+                let customMetadataTypeApiName = customMetadataCheckListItem.value;
+                let apiListResults = await changeSetManager.getRestAPIResults("/query/?q=SELECT Id,QualifiedApiName FROM " + customMetadataTypeApiName);
+                for (let i = 0; i < apiListResults.records.length; i++) {
+                    let apiResultItem = apiListResults.records[i];
+                    result[customMetadataTypeApiName.substr(0, customMetadataTypeApiName.length - 5) + "." + apiResultItem.QualifiedApiName] = apiResultItem;
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["CustomMetadataTypeRecords"][changeSetItem.type][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                );
+            }
+        }
     }
 }

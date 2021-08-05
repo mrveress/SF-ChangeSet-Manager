@@ -27,13 +27,14 @@ document.querySelector("#import-from-file").addEventListener("click", async (ele
 
 async function exportToCsv() {
     let changeSetManager = new ChangeSetManager();
+    let changeSetNameForFile = changeSetManager.getChangeSetNameForFile();
     let csv = await changeSetManager.getCsv();
 
     let downloadLink = document.createElement("a");
     let blob = new Blob(["\ufeff", csv]);
     var url = URL.createObjectURL(blob);
     downloadLink.href = url;
-    downloadLink.download = "ChangeSet-Items.csv";
+    downloadLink.download = changeSetNameForFile + ".csv";
 
     document.body.appendChild(downloadLink);
     downloadLink.click();
@@ -42,13 +43,14 @@ async function exportToCsv() {
 
 async function exportToJson() {
     let changeSetManager = new ChangeSetManager();
+    let changeSetNameForFile = changeSetManager.getChangeSetNameForFile();
     let json = await changeSetManager.getJson();
 
     let downloadLink = document.createElement("a");
     let blob = new Blob(["\ufeff", json]);
     var url = URL.createObjectURL(blob);
     downloadLink.href = url;
-    downloadLink.download = "ChangeSet-Items.json";
+    downloadLink.download = changeSetNameForFile + ".json";
 
     document.body.appendChild(downloadLink);
     downloadLink.click();
