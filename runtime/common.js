@@ -27,11 +27,24 @@ class ChangeSetManager {
         return componentsTableSelector;
     }
 
+    getProfilesTableSelector() {
+        let profileTableSelector = null;
+        if (window.location.href.includes("inboundChangeSetDetailPage")) {
+            profileTableSelector = 'tbody[id$="ics_profile_list_table:tb"]';
+        } else {
+            profileTableSelector = 'tbody[id$="ProfileList:tb"]';
+        }
+        return profileTableSelector;
+    }
+
     async getChangeSetCollection(collectionFormat) {
         collectionFormat = collectionFormat || "changeSetCollection";
         let componentsTableSelector = this.getComponentsTableSelector();
+        let profilesTableSelector = this.getProfilesTableSelector();
         let changeSetCollection = {};
         let changeSetDuplicationChecker = [];
+
+        //ChangeSet Components
         await this.goToFirstPage();
         let navigationToNextStatus = null;
         while (navigationToNextStatus !== "noButton") {
@@ -46,7 +59,18 @@ class ChangeSetManager {
                 navigationToNextStatus = "noButton"
             }
         }
+
+        //ChangeSet Profiles
+        if (document.querySelector(profilesTableSelector)) {
+            let rows = document.querySelector(profilesTableSelector).querySelectorAll("tr");
+            for (let i = 0; i < rows.length; i++) {
+                let changeSetItem = this.getProfileChangeSetItemFromTr(rows[i]);
+                this.addChangeSetItemToChangeSetCollection(changeSetCollection, changeSetDuplicationChecker, changeSetItem);
+            }
+        }
+
         this.sortChangeSetCollection(changeSetCollection);
+
         let result;
         if (collectionFormat === "changeSetCollection") {
             result = changeSetCollection;
@@ -83,6 +107,17 @@ class ChangeSetManager {
         return this.getCsvStringFromChangeSetItem(changeSetItem, withoutParentObject);
     }
 
+    getProfileChangeSetItemFromTr(trElement) {
+        let thisDatas = trElement.querySelectorAll("td");
+        let result = {
+            "name" : thisDatas[1].innerText,
+            "parentObject" : "",
+            "type" : "Profile",
+            "apiName" : thisDatas[2].innerText
+        };
+        return result;
+    }
+
     getChangeSetItemFromTr(trElement) {
         let thisDatas = trElement.querySelectorAll("td");
         let result = {
@@ -94,6 +129,9 @@ class ChangeSetManager {
         //Post-processing
         if (result.type === "Custom Metadata Type" || result.type === "Custom Setting") {
             result.type = "Custom Object";
+        }
+        if (result.type === "Flow Version") {
+            result.type = "Flow Definition";
         }
         return result;
     }
@@ -292,7 +330,7 @@ class ChangeSetManager {
 
     addChangeSetItemCheckboxToForm(childWindow, changeSetItemsType, changeSetItem, targetForm, orgMetadata) {
         let result = false;
-        let typeResolver = this.getTypeResolver(changeSetItemsType);
+        let typeResolver = this.getTypeResolver(changeSetItemsType, orgMetadata);
         if (typeResolver) {
             let componentId = typeResolver.getId(changeSetItem, orgMetadata);
             if (componentId) {
@@ -437,13 +475,15 @@ class ChangeSetManager {
         });
     }
 
-    getTypeResolver(changeSetItemsType) {
+    getTypeResolver(changeSetItemsType, orgMetadata) {
         let result = null
         if (ChangeSetManager.TypeResolver[changeSetItemsType]) {
             result = ChangeSetManager.TypeResolver[changeSetItemsType];
             if (result["sameAs"]) {
-                result = this.getTypeResolver(result["sameAs"]);
+                result = this.getTypeResolver(result["sameAs"], orgMetadata);
             }
+        } else if (orgMetadata && orgMetadata["CustomMetadataTypeRecords"] && orgMetadata["CustomMetadataTypeRecords"][changeSetItemsType]) {
+            result = ChangeSetManager.TypeResolver["Custom Metadata Type Records"];
         }
         return result;
     }
@@ -498,7 +538,11 @@ class ChangeSetManager {
             toolingApiTransformation : (rawData) => {
                 let result = {};
                 rawData.records.forEach(rawDataRecord => {
-                    result[rawDataRecord.DeveloperName] = rawDataRecord;
+                    if (rawDataRecord.SobjectType === "Global") {
+                        result[rawDataRecord.DeveloperName] = rawDataRecord;
+                    } else {
+                        result[rawDataRecord.SobjectType + "." + rawDataRecord.DeveloperName] = rawDataRecord;
+                    }
                 });
                 return result;
             },
@@ -506,8 +550,12 @@ class ChangeSetManager {
                 return orgMetadata["QuickActionDefinition"][changeSetItem.apiName].Id;
             },
             duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                let changeSetItemApiName = changeSetItem.apiName.split(".");
+                changeSetItemApiName = changeSetItemApiName[changeSetItemApiName.length - 1];
+                let anotherChageSetItemApiName = anotherChageSetItem.apiName.split(".");
+                anotherChageSetItemApiName = anotherChageSetItemApiName[anotherChageSetItemApiName.length - 1];
                 return (
-                    changeSetItem.apiName === anotherChageSetItem.apiName
+                    changeSetItemApiName === anotherChageSetItemApiName
                     && changeSetItem.parentObject === anotherChageSetItem.parentObject
                 );
             }
@@ -549,6 +597,67 @@ class ChangeSetManager {
             duplicateChecking : (changeSetItem, anotherChageSetItem) => {
                 return (
                     changeSetItem.apiName === anotherChageSetItem.apiName
+                );
+            }
+        },
+        "Profile" : {
+            toolingApiTypeName : "Profile",
+            prerequisiteTypes : null,
+            toolingApiSoql : "SELECT Id,Name FROM Profile",
+            toolingApiTransformation : (rawData) => {
+                let result = {};
+                rawData.records.forEach(rawDataRecord => {
+                    result[rawDataRecord.Name] = rawDataRecord;
+                });
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["Profile"][changeSetItem.name].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                );
+            }
+        },
+        "Flow Definition" : {
+            toolingApiTypeName : "FlowDefinition",
+            prerequisiteTypes : null,
+            toolingApiSoql : "SELECT Id,DeveloperName FROM FlowDefinition WHERE NamespacePrefix = null",
+            toolingApiTransformation : (rawData) => {
+                let result = {};
+                rawData.records.forEach(rawDataRecord => {
+                    result[rawDataRecord.DeveloperName] = rawDataRecord;
+                });
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["FlowDefinition"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.apiName === anotherChageSetItem.apiName
+                );
+            }
+        },
+        "Field Set" : {
+            toolingApiTypeName : "FieldSet",
+            prerequisiteTypes : null,
+            toolingApiSoql : "SELECT Id,DeveloperName,EntityDefinition.QualifiedApiName FROM FieldSet WHERE NamespacePrefix = null",
+            toolingApiTransformation : (rawData) => {
+                let result = {};
+                rawData.records.forEach(rawDataRecord => {
+                    result[rawDataRecord.EntityDefinition.QualifiedApiName + "." + rawDataRecord.DeveloperName] = rawDataRecord;
+                });
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["FieldSet"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                    && changeSetItem.parentObject === anotherChageSetItem.parentObject
                 );
             }
         },
@@ -646,6 +755,9 @@ class ChangeSetManager {
         "Custom Metadata Type" : {
             sameAs : "Custom Object"
         },
+        "Flow Version" : {
+            sameAs : "Flow Definition"
+        },
         "Page Layout": {
             toolingApiTypeName : "Layout",
             prerequisiteTypes : null,
@@ -722,6 +834,37 @@ class ChangeSetManager {
                 );
             }
         },
+        "Record Type" : {
+            toolingApiTypeName : "RecordType",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection) => {
+                let result = {};
+                let targetSObjects = [];
+                for (let i = 0; i < changeSetCollection["Record Type"].length; i++) {
+                    let changeSetItem = changeSetCollection["Record Type"][i];
+                    let parentSObject = changeSetItem.apiName.split(".")[0];
+                    if (!targetSObjects.includes(parentSObject)) {
+                        targetSObjects.push(parentSObject);
+                        let apiListResults = await changeSetManager.getToolingAPIResults("SELECT Id FROM RecordType WHERE EntityDefinition.QualifiedApiName = '" + parentSObject + "'");
+                        for (let j = 0; j < apiListResults.records.length; j++) {
+                            let apiResults = await changeSetManager.getToolingAPIResults("SELECT Id,FullName,EntityDefinition.QualifiedApiName FROM RecordType WHERE Id = '" + apiListResults.records[j].Id + "' LIMIT 1");
+                            apiResults = apiResults.records[0];
+                            result[apiResults.FullName] = apiResults;
+                        }
+                    }
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["RecordType"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                    && changeSetItem.parentObject === anotherChageSetItem.parentObject
+                );
+            }
+        },
         "Validation Rule" : {
             toolingApiTypeName : "ValidationRule",
             prerequisiteTypes : null,
@@ -753,6 +896,60 @@ class ChangeSetManager {
                 );
             }
         },
+        "Workflow Field Update" : {
+            toolingApiTypeName : "WorkflowFieldUpdate",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection) => {
+                let result = {};
+                let targetSObjects = [];
+                for (let i = 0; i < changeSetCollection["Workflow Field Update"].length; i++) {
+                    let changeSetItem = changeSetCollection["Workflow Field Update"][i];
+                    let parentSObject = changeSetItem.apiName.split(".")[0];
+                    if (!targetSObjects.includes(parentSObject)) {
+                        targetSObjects.push(parentSObject);
+                        let apiListResults = await changeSetManager.getToolingAPIResults("SELECT Id FROM WorkflowFieldUpdate WHERE EntityDefinition.QualifiedApiName = '" + parentSObject + "'");
+                        for (let j = 0; j < apiListResults.records.length; j++) {
+                            let apiResults = await changeSetManager.getToolingAPIResults("SELECT Id,FullName,EntityDefinition.QualifiedApiName FROM WorkflowFieldUpdate WHERE Id = '" + apiListResults.records[j].Id + "' LIMIT 1");
+                            apiResults = apiResults.records[0];
+                            result[apiResults.FullName] = apiResults;
+                        }
+                    }
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["WorkflowFieldUpdate"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                    && changeSetItem.parentObject === anotherChageSetItem.parentObject
+                );
+            }
+        },
+        "Workflow Rule" : {
+            toolingApiTypeName : "WorkflowRule",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection) => {
+                let result = {};
+                let apiListResults = await changeSetManager.getToolingAPIResults("SELECT Id FROM WorkflowRule WHERE NamespacePrefix = null");
+                for (let j = 0; j < apiListResults.records.length; j++) {
+                    let apiResults = await changeSetManager.getToolingAPIResults("SELECT Id,FullName FROM WorkflowRule WHERE Id = '" + apiListResults.records[j].Id + "' LIMIT 1");
+                    apiResults = apiResults.records[0];
+                    result[apiResults.FullName] = apiResults;
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["WorkflowRule"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                    && changeSetItem.parentObject === anotherChageSetItem.parentObject
+                );
+            }
+        },
         "Custom Metadata Type Records" : {
             toolingApiTypeName : "CustomMetadataTypeRecords",
             prerequisiteTypes : null,
@@ -771,8 +968,13 @@ class ChangeSetManager {
                 return orgMetadata["CustomMetadataTypeRecords"][changeSetItem.type][changeSetItem.apiName].Id;
             },
             duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                let changeSetItemApiName = changeSetItem.apiName.split(".");
+                changeSetItemApiName = changeSetItemApiName[changeSetItemApiName.length - 1];
+                let anotherChageSetItemApiName = anotherChageSetItem.apiName.split(".");
+                anotherChageSetItemApiName = anotherChageSetItemApiName[anotherChageSetItemApiName.length - 1];
                 return (
-                    changeSetItem.name === anotherChageSetItem.name
+                    changeSetItem.type === anotherChageSetItem.type
+                    && changeSetItemApiName === anotherChageSetItemApiName
                 );
             }
         }
