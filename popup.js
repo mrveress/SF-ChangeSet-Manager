@@ -43,6 +43,11 @@ async function exportToCsv() {
 
 async function exportToJson() {
     let changeSetManager = new ChangeSetManager();
+    let changeSetType = changeSetManager.getChangeSetType();
+    if (changeSetType === "outbound-open") {
+        alert("Open (not uploaded yet) Outbound ChangeSet cannot be exported to importable format. \nUse any Inbound or Closed (uploaded) Outbound ChangeSet for export to JSON.");
+        return;
+    }
     let changeSetNameForFile = changeSetManager.getChangeSetNameForFile();
     let json = await changeSetManager.getJson();
 
@@ -59,6 +64,11 @@ async function exportToJson() {
 
 async function importFromFile() {
     let changeSetManager = new ChangeSetManager();
+    let changeSetType = changeSetManager.getChangeSetType();
+    if (changeSetType !== "outbound-open") {
+        alert("For importing you should use only Open (not uploaded yet) Outbound Changeset.");
+        return;
+    }
     changeSetManager.importFromFile();
 }
 

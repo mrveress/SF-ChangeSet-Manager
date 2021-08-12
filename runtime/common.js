@@ -1,4 +1,17 @@
 class ChangeSetManager {
+    getChangeSetType() {
+        let result;
+        if (window.location.href.includes("inboundChangeSetDetailPage")) {
+            result = "inbound";
+        } else if (window.location.href.includes("outboundChangeSetDetailPage")) {
+            result = "outbound";
+        }
+        if (result === "outbound") {
+            result += "-" + window.document.querySelector('span[id$="status_section:outboundCs__status"]').innerText.toLowerCase();
+        }
+        return result;
+    }
+
     async getCsv() {
         let resultCsv = "Name,Parent Object,Type,API Name\n";
         resultCsv += this.getCsvStringsFromChangeSetCollection(await this.getChangeSetCollection());
@@ -211,7 +224,8 @@ class ChangeSetManager {
         let fileChooser = document.createElement("input");
         fileChooser.style.display = "none";
         fileChooser.type = 'file';
-        fileChooser.accept = ".csv,.json";
+        //fileChooser.accept = ".csv,.json";
+        fileChooser.accept = ".json";
 
         fileChooser.addEventListener('change', (evt) => {
             if (evt.target.value.length == 0) {
@@ -224,10 +238,12 @@ class ChangeSetManager {
                         let contents = e.target.result;
                         document.body.removeChild(fileChooser);
 
-                        if (/^.*\.csv$/.test(f.name)) {
+                        /*if (/^.*\.csv$/.test(f.name)) {
                             this.importFromCsv(contents);
-                        } else if (/^.*\.json$/.test(f.name)) {
+                        } else */if (/^.*\.json$/.test(f.name)) {
                             this.importFromJson(contents);
+                        } else {
+                            alert("Not appropriate file format. \nUse JSON that you got from Export operation.");
                         }
                     }
                     reader.readAsText(f);
@@ -267,21 +283,28 @@ class ChangeSetManager {
         let childWindow = await this.openChildWindow(window.location.href);
         await this.redirectWithButton(childWindow, 'input[id$="component_list_form_buttons:outboundCs_add"]');
         let internalChangeSetId = this.getQueryParameter(childWindow, "id");
-        let customMetadataCheckList = this.getCustomMetadataCheckListFromAddPage(childWindow);
+        let customMetadataCheckList = await this.getCustomMetadataCheckListFromAddPage(childWindow);
         let orgMetadata = await this.getOrgMetadata(changeSetCollection, customMetadataCheckList);
         await this.importByTypes(childWindow, internalChangeSetId, changeSetCollection, orgMetadata);
     }
 
-    getCustomMetadataCheckListFromAddPage(childWindow) {
+    async getCustomMetadataCheckListFromAddPage(childWindow) {
         let customMetadataList = {};
-        childWindow.document.querySelectorAll("select#entityType option").forEach(optionElement => {
+        /*childWindow.document.querySelectorAll("select#entityType option").forEach(optionElement => {
             if (optionElement.value.endsWith("__mdt")) {
                 customMetadataList[optionElement.innerText] = {
                     "label" : optionElement.innerText,
                     "value" : optionElement.value
                 };
             }
-        });
+        });*/
+        let apiResults = await this.getToolingAPIResults("SELECT DurableId,Label,QualifiedApiName FROM EntityDefinition WHERE QualifiedApiName LIKE '%__mdt' LIMIT 10");
+        for (let i = 0; i < apiResults.records.length; i++) {
+            customMetadataList[apiResults.records[i].Label] = {
+                "label" : apiResults.records[i].Label,
+                "value" : apiResults.records[i].QualifiedApiName
+            };
+        }
         return customMetadataList;
     }
 
@@ -443,7 +466,7 @@ class ChangeSetManager {
 
     getToolingAPIResults(soql) {
         return new Promise((resolve, reject) => {
-            let url = "https://" + location.hostname + "/services/data/v51.0/tooling/query/?q=" + soql.replaceAll(/\s+/gi,"+");
+            let url = "https://" + location.hostname + "/services/data/v51.0/tooling/query/?q=" + soql.replaceAll(/\s+/gi,"+").replaceAll(/\%/gi,"%25");
             let sid = document.cookie.match(/(^|;\s*)sid=(.+?);/)[2];
 
             let xhr = new XMLHttpRequest();
