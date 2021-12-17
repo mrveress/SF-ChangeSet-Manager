@@ -146,6 +146,9 @@ class ChangeSetManager {
         if (result.type === "Flow Version") {
             result.type = "Flow Definition";
         }
+        if (result.type === "Classic Email Template") {
+            result.type = "Email Template";
+        }
         return result;
     }
 
@@ -298,7 +301,7 @@ class ChangeSetManager {
                 };
             }
         });*/
-        let apiResults = await this.getToolingAPIResults("SELECT DurableId,Label,QualifiedApiName FROM EntityDefinition WHERE QualifiedApiName LIKE '%__mdt' LIMIT 10");
+        let apiResults = await this.getToolingAPIResults("SELECT DurableId,Label,QualifiedApiName FROM EntityDefinition WHERE QualifiedApiName LIKE '%__mdt'");
         for (let i = 0; i < apiResults.records.length; i++) {
             customMetadataList[apiResults.records[i].Label] = {
                 "label" : apiResults.records[i].Label,
@@ -316,7 +319,7 @@ class ChangeSetManager {
         let atLeastOne = false;
         Object.keys(changeSetCollection).forEach(changeSetItemsType => {
             changeSetCollection[changeSetItemsType].forEach(changeSetItem => {
-                if ( !this.checkDuplicationInChangeSetCollection(existsChangeSetCollection, changeSetItem) ) {
+                if ( !this.checkDuplicationInChangeSetCollection(existsChangeSetCollection, changeSetItem, orgMetadata) ) {
                     let addingResult = this.addChangeSetItemCheckboxToForm(childWindow, changeSetItemsType, changeSetItem, targetForm, orgMetadata);
                     atLeastOne = atLeastOne || addingResult;
                 }
@@ -336,9 +339,9 @@ class ChangeSetManager {
         });
     }
 
-    checkDuplicationInChangeSetCollection(changeSetCollection, changeSetItem) {
+    checkDuplicationInChangeSetCollection(changeSetCollection, changeSetItem, orgMetadata) {
         let result = false;
-        let typeResolver = ChangeSetManager.TypeResolver[changeSetItem.type];
+        let typeResolver = this.getTypeResolver(changeSetItem.type, orgMetadata);
         if (typeResolver && changeSetCollection[changeSetItem.type]) {
             for (let i = 0; i < changeSetCollection[changeSetItem.type].length; i++) {
                 let anotherChangeSetItem = changeSetCollection[changeSetItem.type][i];
@@ -365,6 +368,7 @@ class ChangeSetManager {
                 tmpCheckbox.checked = true;
                 //console.log(this.getChangeSetItemId(changeSetItem));
                 result = true;
+                console.info("Metadata Item Added", changeSetItem);
             } else {
                 console.info("Can't get metadata - Skip", changeSetItem);
             }
@@ -413,6 +417,7 @@ class ChangeSetManager {
             let changeSetItemsType = changeSetCollectionKeys[i];
             await this.pushToolingAPIItemsToOrgMetadataVariable(changeSetItemsType, changeSetCollection, orgMetadata, customMetadataCheckList);
         }
+        console.log(customMetadataCheckList);
         console.log(orgMetadata);
         return orgMetadata;
     }
@@ -466,7 +471,7 @@ class ChangeSetManager {
 
     getToolingAPIResults(soql) {
         return new Promise((resolve, reject) => {
-            let url = "https://" + location.hostname + "/services/data/v51.0/tooling/query/?q=" + soql.replaceAll(/\s+/gi,"+").replaceAll(/\%/gi,"%25");
+            let url = "https://" + location.hostname + "/services/data/v51.0/tooling/query/?q=" + soql.replaceAll(/\s+/gi,"+").replaceAll(/\%/gi,"%25").replaceAll(/\&/gi,"%26");
             let sid = document.cookie.match(/(^|;\s*)sid=(.+?);/)[2];
 
             let xhr = new XMLHttpRequest();
@@ -781,6 +786,9 @@ class ChangeSetManager {
         "Flow Version" : {
             sameAs : "Flow Definition"
         },
+        "Classic Email Template" : {
+            sameAs : "Email Template"
+        },
         "Page Layout": {
             toolingApiTypeName : "Layout",
             prerequisiteTypes : null,
@@ -888,6 +896,153 @@ class ChangeSetManager {
                 );
             }
         },
+        "Static Resource" : {
+            toolingApiTypeName : "StaticResource",
+            prerequisiteTypes : null,
+            toolingApiSoql : "SELECT Id,Name,NamespacePrefix FROM StaticResource WHERE NamespacePrefix = null",
+            toolingApiTransformation : (rawData) => {
+                let result = {};
+                rawData.records.forEach(rawDataRecord => {
+                    result[rawDataRecord.Name] = rawDataRecord;
+                });
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["StaticResource"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.apiName === anotherChageSetItem.apiName
+                );
+            }
+        },
+        "Lightning Page" : {
+            toolingApiTypeName : "FlexiPage",
+            prerequisiteTypes : null,
+            toolingApiSoql : "SELECT Id,DeveloperName,NamespacePrefix FROM FlexiPage WHERE NamespacePrefix = null",
+            toolingApiTransformation : (rawData) => {
+                let result = {};
+                rawData.records.forEach(rawDataRecord => {
+                    result[rawDataRecord.DeveloperName] = rawDataRecord;
+                });
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["FlexiPage"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.apiName === anotherChageSetItem.apiName
+                );
+            }
+        },
+        "Custom Label" : {
+            toolingApiTypeName : "ExternalString",
+            prerequisiteTypes : null,
+            toolingApiSoql : "SELECT Id,Name,NamespacePrefix FROM ExternalString WHERE NamespacePrefix = null",
+            toolingApiTransformation : (rawData) => {
+                let result = {};
+                rawData.records.forEach(rawDataRecord => {
+                    result[rawDataRecord.Name] = rawDataRecord;
+                });
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["ExternalString"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.apiName === anotherChageSetItem.apiName
+                );
+            }
+        },
+        "Custom Notification Type" : {
+            toolingApiTypeName : "CustomNotificationType",
+            prerequisiteTypes : null,
+            toolingApiSoql : "SELECT Id,CustomNotifTypeName,DeveloperName FROM CustomNotificationType WHERE NamespacePrefix = null",
+            toolingApiTransformation : (rawData) => {
+                let result = {};
+                rawData.records.forEach(rawDataRecord => {
+                    result[rawDataRecord.DeveloperName] = rawDataRecord;
+                });
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["CustomNotificationType"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.apiName === anotherChageSetItem.apiName
+                );
+            }
+        },
+        "Email Template" : {
+            toolingApiTypeName : "EmailTemplate",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection) => {
+                let result = {};
+                for (let i = 0; i < changeSetCollection["Email Template"].length; i++) {
+                    let changeSetItem = changeSetCollection["Email Template"][i];
+                    let parentSObject = changeSetItem.apiName.split(".")[0];
+
+                    let apiListResults = await changeSetManager.getToolingAPIResults("SELECT Id FROM EmailTemplate WHERE Name = '" + changeSetItem.name + "'");
+                    for (let j = 0; j < apiListResults.records.length; j++) {
+                        let apiResults = await changeSetManager.getToolingAPIResults("SELECT Id,Name,FullName FROM EmailTemplate WHERE Id = '" + apiListResults.records[j].Id + "' LIMIT 1");
+                        apiResults = apiResults.records[0];
+                        result[apiResults.FullName] = apiResults;
+                    }
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["EmailTemplate"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                let changeSetItemApiName = changeSetItem.apiName.split("/");
+                changeSetItemApiName = changeSetItemApiName[changeSetItemApiName.length - 1];
+                let anotherChageSetItemApiName = anotherChageSetItem.apiName.split("/");
+                anotherChageSetItemApiName = anotherChageSetItemApiName[anotherChageSetItemApiName.length - 1];
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                    && changeSetItemApiName === anotherChageSetItemApiName
+                );
+            }
+        },
+        "Button or Link" : {
+            toolingApiTypeName : "WebLink",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection) => {
+                let result = {};
+                let targetSObjects = [];
+                for (let i = 0; i < changeSetCollection["Button or Link"].length; i++) {
+                    let changeSetItem = changeSetCollection["Button or Link"][i];
+                    let parentSObject = changeSetItem.apiName.split(".")[0];
+                    if (!targetSObjects.includes(parentSObject)) {
+                        targetSObjects.push(parentSObject);
+                        let apiListResults = await changeSetManager.getToolingAPIResults("SELECT Id FROM WebLink WHERE EntityDefinition.QualifiedApiName = '" + parentSObject + "'");
+                        for (let j = 0; j < apiListResults.records.length; j++) {
+                            let apiResults = await changeSetManager.getToolingAPIResults("SELECT Id,FullName,EntityDefinition.QualifiedApiName FROM WebLink WHERE Id = '" + apiListResults.records[j].Id + "' LIMIT 1");
+                            apiResults = apiResults.records[0];
+                            result[apiResults.FullName] = apiResults;
+                        }
+                    }
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["WebLink"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                let changeSetItemApiName = changeSetItem.apiName.split(".");
+                changeSetItemApiName = changeSetItemApiName[changeSetItemApiName.length - 1];
+                let anotherChageSetItemApiName = anotherChageSetItem.apiName.split(".");
+                anotherChageSetItemApiName = anotherChageSetItemApiName[anotherChageSetItemApiName.length - 1];
+                return (
+                    changeSetItemApiName === anotherChageSetItemApiName
+                    && changeSetItem.parentObject === anotherChageSetItem.parentObject
+                );
+            }
+        },
         "Validation Rule" : {
             toolingApiTypeName : "ValidationRule",
             prerequisiteTypes : null,
@@ -950,6 +1105,37 @@ class ChangeSetManager {
                 );
             }
         },
+        "Workflow Email Alert" : {
+            toolingApiTypeName : "WorkflowAlert",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection) => {
+                let result = {};
+                let targetSObjects = [];
+                for (let i = 0; i < changeSetCollection["Workflow Email Alert"].length; i++) {
+                    let changeSetItem = changeSetCollection["Workflow Email Alert"][i];
+                    let parentSObject = changeSetItem.apiName.split(".")[0];
+                    if (!targetSObjects.includes(parentSObject)) {
+                        targetSObjects.push(parentSObject);
+                        let apiListResults = await changeSetManager.getToolingAPIResults("SELECT Id FROM WorkflowAlert WHERE EntityDefinition.QualifiedApiName = '" + parentSObject + "'");
+                        for (let j = 0; j < apiListResults.records.length; j++) {
+                            let apiResults = await changeSetManager.getToolingAPIResults("SELECT Id,FullName,EntityDefinition.QualifiedApiName FROM WorkflowAlert WHERE Id = '" + apiListResults.records[j].Id + "' LIMIT 1");
+                            apiResults = apiResults.records[0];
+                            result[apiResults.FullName] = apiResults;
+                        }
+                    }
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata["WorkflowAlert"][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                    && changeSetItem.parentObject === anotherChageSetItem.parentObject
+                );
+            }
+        },
         "Workflow Rule" : {
             toolingApiTypeName : "WorkflowRule",
             prerequisiteTypes : null,
@@ -970,6 +1156,54 @@ class ChangeSetManager {
                 return (
                     changeSetItem.name === anotherChageSetItem.name
                     && changeSetItem.parentObject === anotherChageSetItem.parentObject
+                );
+            }
+        },
+        "Approval Process" : {
+            toolingApiTypeName : "ApprovalProcesses",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection) => {
+                let result = {};
+                let apiListResults = await changeSetManager.getRestAPIResults("/process/approvals/");
+                for (let sObjApiName in apiListResults.approvals) {
+                    let apiResultSObjItem = apiListResults.approvals[sObjApiName];
+                    for (let apiResultItem of apiResultSObjItem) {
+                        result[apiResultItem.object + "." + apiResultItem.name] = apiResultItem;
+                    }
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                let sObjApiName = changeSetItem.apiName.split(".");
+                sObjApiName = sObjApiName[0];
+                return orgMetadata["ApprovalProcesses"][sObjApiName + "." +changeSetItem.name].id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.name === anotherChageSetItem.name
+                    && changeSetItem.parentObject === anotherChageSetItem.parentObject
+                );
+            }
+        },
+        "Queue" : {
+            toolingApiTypeName : "Queue",
+            prerequisiteTypes : null,
+            apiInfoHandler : async (changeSetManager, changeSetCollection) => {
+                let result = {};
+                let apiListResults = await changeSetManager.getRestAPIResults("/query/?q=SELECT Id,DeveloperName,Name FROM Group WHERE Type = 'Queue'");
+                for (let i = 0; i < apiListResults.records.length; i++) {
+                    let apiResultItem = apiListResults.records[i];
+                    result[apiResultItem.DeveloperName] = apiResultItem;
+                }
+                return result;
+            },
+            getId : (changeSetItem, orgMetadata) => {
+                return orgMetadata[changeSetItem.type][changeSetItem.apiName].Id;
+            },
+            duplicateChecking : (changeSetItem, anotherChageSetItem) => {
+                return (
+                    changeSetItem.type === anotherChageSetItem.type
+                    && changeSetItem.apiName === anotherChageSetItem.apiName
                 );
             }
         },
